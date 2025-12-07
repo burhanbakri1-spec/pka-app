@@ -1,9 +1,6 @@
-customtkinter
-openpyxl
+streamlit
+psycopg2-binary
 docxtpl
-docx2pdf
-pdf2image
 qrcode
 Pillow
-Faker
-python-docx
+st-supabase-connection
