@@ -1,114 +1,202 @@
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import streamlit as st
+from datetime import datetime, timedelta
 
-# ---------------------------------------------------------
-#  إعدادات الاتصال (Supabase)
-# ---------------------------------------------------------
-
-# ضع الرابط الذي نسخته هنا بين علامتي التنصيص
-# مثال: "postgresql://postgres.user:pass@host:port/postgres"
+# رابط الاتصال (تأكد من صحته)
 DB_URI = "postgresql://postgres.oemxebsztjydpfeoleya:imkanWB123@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres"
 
 def get_connection():
-    """إنشاء اتصال جديد بقاعدة البيانات"""
     try:
-        conn = psycopg2.connect(DB_URI)
-        return conn
+        return psycopg2.connect(DB_URI)
     except Exception as e:
-        st.error(f"فشل الاتصال بقاعدة البيانات: {e}")
+        st.error(f"Database connection error: {e}")
         return None
 
 def init_db():
-    """إنشاء جدول الأعضاء إذا لم يكن موجوداً"""
     conn = get_connection()
     if conn:
         try:
             with conn.cursor() as cur:
-                # ملاحظة: في PostgreSQL نستخدم SERIAL بدلاً من AUTOINCREMENT
+                # جدول الأندية
+                cur.execute('''
+                    CREATE TABLE IF NOT EXISTS clubs (
+                        id SERIAL PRIMARY KEY,
+                        club_membership_id TEXT, name TEXT, representative_name TEXT,
+                        address TEXT, email TEXT, phone TEXT, classification TEXT,
+                        points INTEGER DEFAULT 0, affiliation_date TEXT,
+                        subscription_expiry_date TEXT, representative_gender TEXT,
+                        club_subscription_fee REAL, admin_subscription_fee REAL,
+                        attachments_data TEXT
+                    );
+                ''')
+                
+                # جدول الأعضاء
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS members (
                         id SERIAL PRIMARY KEY,
-                        full_name TEXT NOT NULL,
-                        full_name_en TEXT,
-                        pkf_id TEXT UNIQUE,
-                        role TEXT NOT NULL,
-                        dob TEXT,
-                        club_name TEXT,
-                        photo_path TEXT,
-                        
-                        weight TEXT,
-                        discipline TEXT,
-                        belt_rank TEXT,
-                        
-                        rank_local TEXT,
-                        rank_intl TEXT,
-                        belt_date TEXT,
-                        
-                        degree_level TEXT,
-                        license_date TEXT,
-                        job_title TEXT
+                        pkf_id TEXT UNIQUE, full_name TEXT, full_name_ar TEXT,
+                        id_number TEXT, role TEXT, dob TEXT, gender TEXT,
+                        phone TEXT, email TEXT, photo_path TEXT,
+                        club_id INTEGER REFERENCES clubs(id) ON DELETE SET NULL,
+                        club_name TEXT, 
+                        weight TEXT, discipline TEXT, current_belt TEXT,
+                        belt_rank TEXT, belt_date TEXT,
+                        rank_local TEXT, rank_intl TEXT,
+                        degree_level TEXT, license_date TEXT, job_title TEXT,
+                        expiry_date TEXT, passport_number TEXT, passport_expiry_date TEXT,
+                        specific_data TEXT, notes TEXT, admin_title TEXT
                     );
                 ''')
                 conn.commit()
-                print("✅ Database initialized successfully (Supabase).")
-        except Exception as e:
-            print(f"❌ Database initialization failed: {e}")
         finally:
             conn.close()
 
+# --- دوال الإضافة والتعديل ---
 def add_member(data):
-    """إضافة عضو جديد"""
     conn = get_connection()
-    if not conn:
-        return False, "فشل الاتصال بالسيرفر"
-    
+    if not conn: return False, "No connection"
     try:
         with conn.cursor() as cur:
-            cur.execute('''
-                INSERT INTO members (
-                    full_name, full_name_en, pkf_id, role, dob, club_name, photo_path,
-                    weight, discipline, belt_rank, 
-                    rank_local, rank_intl, belt_date,
-                    degree_level, license_date, job_title
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (
-                data.get('full_name'), data.get('full_name_en'), data.get('pkf_id'), data.get('role'), data.get('dob'),
-                data.get('club_name'), data.get('photo_path'), 
-                data.get('weight'), data.get('discipline'), data.get('belt_rank'), 
-                data.get('rank_local'), data.get('rank_intl'), data.get('belt_date'),
-                data.get('degree_level'), data.get('license_date'), data.get('job_title')
-            ))
+            columns = list(data.keys())
+            values = list(data.values())
+            placeholders = ["%s"] * len(values)
+            sql = f"INSERT INTO members ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
+            cur.execute(sql, values)
             conn.commit()
-            return True, "تمت الإضافة بنجاح"
-    except psycopg2.IntegrityError:
-        return False, "رقم العضوية (PKF ID) موجود مسبقاً!"
+            return True, "Added successfully"
     except Exception as e:
         return False, str(e)
     finally:
         conn.close()
 
-def search_members(query=""):
-    """البحث عن الأعضاء"""
+def update_member(pkf_id, data):
     conn = get_connection()
-    if not conn:
-        return []
-    
+    if not conn: return False
     try:
-        # RealDictCursor يرجع النتائج كقاموس (مثل SQLite Row)
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            if query:
-                # البحث بالاسم أو الرقم
-                cur.execute("SELECT * FROM members WHERE full_name ILIKE %s OR pkf_id ILIKE %s LIMIT 50", (f'%{query}%', f'%{query}%'))
-            else:
-                # عرض آخر 20 مضافاً
-                cur.execute("SELECT * FROM members ORDER BY id DESC LIMIT 20")
-            
-            rows = cur.fetchall()
-            # تحويل RealDictRow إلى dict عادي لتجنب مشاكل التوافق
-            return [dict(row) for row in rows]
+        with conn.cursor() as cur:
+            set_clause = ", ".join([f"{key} = %s" for key in data.keys()])
+            values = list(data.values())
+            values.append(pkf_id)
+            sql = f"UPDATE members SET {set_clause} WHERE pkf_id = %s"
+            cur.execute(sql, values)
+            conn.commit()
+            return True
     except Exception as e:
-        st.error(f"خطأ في البحث: {e}")
-        return []
+        return False
+    finally:
+        conn.close()
+
+def delete_member(pkf_id):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM members WHERE pkf_id = %s", (pkf_id,))
+            conn.commit()
+    finally:
+        conn.close()
+
+def add_club(data):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            columns = list(data.keys())
+            values = list(data.values())
+            placeholders = ["%s"] * len(values)
+            sql = f"INSERT INTO clubs ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
+            cur.execute(sql, values)
+            conn.commit()
+            return True
+    except Exception as e:
+        return False
+    finally:
+        conn.close()
+
+# --- دوال البحث المتقدم ---
+def search_members_advanced(**kwargs):
+    conn = get_connection()
+    if not conn: return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            sql = "SELECT * FROM members WHERE 1=1"
+            params = []
+            
+            if kwargs.get('query'):
+                sql += " AND (full_name ILIKE %s OR full_name_ar ILIKE %s OR pkf_id ILIKE %s)"
+                q = f"%{kwargs['query']}%"
+                params.extend([q, q, q])
+            
+            if kwargs.get('role') and kwargs['role'] != "All Roles":
+                sql += " AND role = %s"
+                params.append(kwargs['role'])
+                
+            if kwargs.get('club') and kwargs['club'] != "All Clubs":
+                sql += " AND club_name = %s"
+                params.append(kwargs['club'])
+
+            # يمكن إضافة المزيد من الفلاتر هنا (الحزام، المهنة، التواريخ)
+            
+            sql += " ORDER BY id DESC LIMIT 100"
+            cur.execute(sql, params)
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+def get_all_clubs():
+    conn = get_connection()
+    if not conn: return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM clubs ORDER BY name ASC")
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+def get_unique_clubs():
+    clubs = get_all_clubs()
+    return [c['name'] for c in clubs]
+
+# --- دوال التنبيهات (Alerts) ---
+def get_expiring_members(days):
+    conn = get_connection()
+    if not conn: return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # PostgreSQL logic for date comparison
+            # نفترض أن التواريخ مخزنة كنص YYYY-MM-DD
+            target_date = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            
+            sql = """
+                SELECT * FROM members 
+                WHERE expiry_date IS NOT NULL 
+                AND expiry_date != ''
+                AND expiry_date <= %s 
+                AND expiry_date >= %s
+                ORDER BY expiry_date ASC
+            """
+            cur.execute(sql, (target_date, current_date))
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+def get_expiring_passports(days):
+    conn = get_connection()
+    if not conn: return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            target_date = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            
+            sql = """
+                SELECT * FROM members 
+                WHERE passport_expiry_date IS NOT NULL 
+                AND passport_expiry_date != ''
+                AND passport_expiry_date <= %s 
+                AND passport_expiry_date >= %s
+                ORDER BY passport_expiry_date ASC
+            """
+            cur.execute(sql, (target_date, current_date))
+            return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
